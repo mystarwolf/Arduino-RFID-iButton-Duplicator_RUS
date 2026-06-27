@@ -10,7 +10,7 @@
   
   SibMan54, 2023 https://github.com/SibMan54/Arduino-RFID-iButton-Duplicator
   
-  Igor Cheprasov, 2026 https://github.com/mystarwolf/Arduino-RFID-iButton-Duplicator_RUS
+  Igor Cheprasov, 2026
   
   ---
   За основу взят код SibMan54:
