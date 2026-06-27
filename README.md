@@ -7,7 +7,9 @@
   
   Авторы: 
   МЕХАТРОН DIY, AlexMalov, 2019 https://github.com/AlexMalov/EasyKeyDublicatorRFID_OLED  
+  
   SibMan54, 2023 https://github.com/SibMan54/Arduino-RFID-iButton-Duplicator
+  
   Igor Cheprasov, 2026 https://github.com/mystarwolf/Arduino-RFID-iButton-Duplicator_RUS
   
   ---
