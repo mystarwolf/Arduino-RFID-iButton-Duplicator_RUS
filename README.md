@@ -2,7 +2,9 @@
   Копировальщик ключей для домофона RFID с OLED дисплеем и хранением ключей в памяти EEPROM
   Авторы: 
   МЕХАТРОН DIY, AlexMalov, 2019 https://github.com/AlexMalov/EasyKeyDublicatorRFID_OLED/
+  
   SibMan54, 2023 https://github.com/SibMan54/Arduino-RFID-iButton-Duplicator
+  
   mystarwolf, 2026 https://github.com/mystarwolf/Arduino-RFID-iButton-Duplicator_RUS
   
   ---
