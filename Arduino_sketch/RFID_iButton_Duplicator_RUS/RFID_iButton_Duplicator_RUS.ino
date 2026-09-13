@@ -21,6 +21,14 @@ Igor Cheprasov, 2026
   4. Задержка запуска уменьшена до 1,5 сек.;
   5. Добавлена заставка при смене режима работы;
   6. В режиме очистки MIFARE-ключей вместо списка ключей из памяти показывается текстовая подсказка.
+
+  Дополнения от 13.09.2026:
+  1. Отказ от типа String в скетче;
+  2. Более стабильная запись и проверка записанных болванок Em-Marine (раньше сыпал ошибками, даже если запись была произведена успешно);
+  3. Отключение генератора 125 кГц перед чтением Mifare - существенно стабильней работа и радиус MFRC522 за счет отсутствия паразитных шумов;
+  4. Мелкие правки отображаемых сообщений на дисплее;
+  5. Короткий тон при включении - для возврата к оригинальной мелодии включения раскомментируйте первые ноты в Sd_StartOK().
+
 */
 
 // Подключаем библиотеки
@@ -48,7 +56,7 @@ Igor Cheprasov, 2026
 
 // Настройки
 // #define DEBUG_ENABLED    // Раскоментируйте для вкл отладки
-// #define BLUE_MODE       // Раскоментируйте если вам нужен BlueMode (иначе активен режим очистки MIFARE-ключей)
+#define BLUE_MODE       // Раскоментируйте если вам нужен BlueMode (эмуляция ключа, иначе активен режим очистки MIFARE-ключей)
 #define rfidUsePWD 0    // ключ использует пароль для изменения
 #define rfidPWD 123456  // пароль для ключа
 #define rfidBitRate 2   // Скорость обмена с rfid в kbps
@@ -104,31 +112,42 @@ enum emMode { md_empty,
 emMode copierMode = md_empty;
 
 void OLED_printKey(byte buf[8], byte msgType = 0) {
-  String st;
-  switch (msgType) {
-    case 0: st = "Выбран ключ " + String(EEPROM_key_index) + " из " + String(EEPROM_key_count); break;
-    case 1: st = "Зажми для сохранения"; break;
-    case 3: st = "Ключ " + String(indxKeyInROM(buf)) + " (уже сохранен)"; break;
-  }
   myOLED.clear();
   myOLED.home();
-  myOLED.print(st);
-  st = "";
-  for (byte i = 0; i < 8; i++) st += String(buf[i], HEX) + ":";
-  myOLED.setCursorXY(0, 12);
-  myOLED.print(st);
-  st = "Тип: ";
-  switch (keyType) {
-    case keyDallas: st += "Dallas"; break;
-    case keyCyfral: st += "Cyfral"; break;
-    case keyMetacom: st += "Metakom"; break;
-    case keyEM_Marine: st += "EM-Marine"; break;
-    case keyMifare: st += "Mifare"; break;
-    case keyUnknown: st += "не определен"; break;
-    default: st += "не определен"; break;
+  
+  // Вывод сообщения без использования класса String
+  if (msgType == 0) {
+    myOLED.print(F("Ключ "));
+    myOLED.print(EEPROM_key_index);
+    myOLED.print(F(" из "));
+    myOLED.print(EEPROM_key_count);
+  } else if (msgType == 1) {
+    myOLED.print(F("Зажми для сохран."));
+  } else if (msgType == 3) {
+    myOLED.print(F("Ключ "));
+    myOLED.print(indxKeyInROM(buf));
+    myOLED.print(F(" (сохранен)"));
   }
+
+  // Вывод HEX-кода ключа
+  myOLED.setCursorXY(0, 12);
+  for (byte i = 0; i < 8; i++) {
+    if (buf[i] < 0x10) myOLED.print('0'); // Добавляем ведущий ноль
+    myOLED.print(buf[i], HEX);
+    if (i < 7) myOLED.print(':');
+  }
+
+  // Вывод типа ключа
   myOLED.setCursorXY(0, 24);
-  myOLED.print(st);
+  myOLED.print(F("Тип: "));
+  switch (keyType) {
+    case keyDallas: myOLED.print(F("Dallas")); break;
+    case keyCyfral: myOLED.print(F("Cyfral")); break;
+    case keyMetacom: myOLED.print(F("Metakom")); break;
+    case keyEM_Marine: myOLED.print(F("EM-Marine")); break;
+    case keyMifare: myOLED.print(F("Mifare")); break;
+    default: myOLED.print(F("Неизвестен")); break;
+  }
   myOLED.update();
 }
 
@@ -157,7 +176,7 @@ void showModeSplash(emMode mode) {
       break;
     case md_threeMode:
       #ifdef BLUE_MODE
-        myOLED.print(F("BlueMode"));
+        myOLED.print(F("Эмуляция"));
       #else
         myOLED.print(F("Очистка"));
       #endif
@@ -985,39 +1004,119 @@ bool sendOpT5557(byte opCode, unsigned long password = 0, byte lockBit = 0, unsi
 }
 
 bool write2rfidT5557(byte* buf) {
-  bool result;
+  bool result = false;
   unsigned long data32;
+
+  // 1. ЗАПИСЬ ДАННЫХ (как в оригинале, это работает)
   delay(6);
-  for (byte k = 0; k < 2; k++) {  // send key data
-    data32 = (unsigned long)buf[0 + (k << 2)] << 24 | (unsigned long)buf[1 + (k << 2)] << 16 | (unsigned long)buf[2 + (k << 2)] << 8 | (unsigned long)buf[3 + (k << 2)];
-    rfidGap(30 * 8);                         //start gap
-    sendOpT5557(0b10, 0, 0, data32, k + 1);  //передаем 32 бита ключа в blok k
-    Serial.print('*');
+  for (byte k = 0; k < 2; k++) {
+    data32 = (unsigned long)buf[0 + (k << 2)] << 24 | 
+             (unsigned long)buf[1 + (k << 2)] << 16 | 
+             (unsigned long)buf[2 + (k << 2)] << 8 | 
+             (unsigned long)buf[3 + (k << 2)];
+    rfidGap(30 * 8);
+    sendOpT5557(0b10, 0, 0, data32, k + 1);
     delay(6);
   }
+
+  // 2. СБРОС БОЛВАНКИ (Reset)
   delay(6);
-  rfidGap(30 * 8);  //start gap
-  sendOpT5557(0b00);
-  delay(4);
-  result = readEM_Marie(addr);
-  TCCR2A &= ~_BV(COM2B1);  //Оключить ШИМ COM2B (pin 3)
-  for (byte i = 0; i < 8; i++)
-    if (addr[i] != keyID[i]) {
-      result = false;
-      break;
+  rfidGap(30 * 8);
+  sendOpT5557(0b00); 
+
+  // 3. КРИТИЧЕСКИ ВАЖНАЯ ЗАДЕРЖКА
+  // T5557 нужно время (около 15-20 мс) после команды Reset, 
+  // чтобы перезагрузить внутреннюю логику и начать трансляцию данных
+  delay(20); 
+
+  // 4. ПЕРЕНАСТРОЙКА АППАРАТНОЙ ЧАСТИ НА РЕЖИМ ЧТЕНИЯ
+  // После записи таймер мог остаться в состоянии "gap". 
+  // Этот вызов гарантированно возвращает его в режим непрерывной генерации 125 кГц
+  // и правильно настраивает аналоговый компаратор.
+  rfidACsetOn();
+  delay(10); // Даем генератору и компаратору стабилизироваться
+
+  // 5. ПРОВЕРКА (до 3 попыток чтения)
+  for (byte attempt = 0; attempt < 3; attempt++) {
+    if (readEM_Marie(addr)) {
+      result = true;
+      break; // Успешно прочитали, выходим из цикла
     }
+    delay(10); // Небольшая пауза перед повторной попыткой
+  }
+
+  // 6. ОТКЛЮЧЕНИЕ ШИМ (но НЕ меняем pinMode, чтобы не убивать поле!)
+  TCCR2A &= ~_BV(COM2B1); 
+
+  // 7. СВЕРКА ПРОЧИТАННОГО С ОРИГИНАЛОМ
+  if (result) {
+    for (byte i = 0; i < 8; i++) {
+      if (addr[i] != keyID[i]) {
+        result = false;
+        break;
+      }
+    }
+  }
+
+  // 8. ИНДИКАЦИЯ РЕЗУЛЬТАТА
   if (!result) {
     Serial.println(F(" The key copy faild"));
-    OLED_printError(F("Копирование не удалось"));
+    OLED_printError(F("Сбой записи"), true);
     Sd_ErrorBeep();
+    statOk = false; // Сбрасываем флаг, чтобы можно было попробовать снова
   } else {
     Serial.println(F(" The key has copied successfully"));
     OLED_printError(F("Ключ скопирован"), false);
     Sd_ReadOK();
-    delay(2000);
+    statOk = true; // Блокируем повторную запись этого же ключа
+    delay(1500);
   }
+
   digitalWrite(R_Led, HIGH);
   return result;
+}
+
+bool write2rfid() {
+  bool Check = true;
+  
+  // 1. Проверяем, не поднесли ли мы случайно оригинал вместо болванки
+  if (searchEM_Marine(false)) {
+    for (byte i = 0; i < 8; i++) {
+      if (addr[i] != keyID[i]) {
+        Check = false;
+        break;
+      }
+    }
+    
+    if (Check) { // Если коды совпадают, писать не нужно
+      digitalWrite(R_Led, LOW);
+      Serial.println(F(" it is the same key. Writing is not needed."));
+      OLED_printError(F("Ключи совпадают"));
+      Sd_ErrorBeep();
+      digitalWrite(R_Led, HIGH);
+      delay(1000);
+      return false;
+    }
+  } else {
+    // Если ключ вообще не прочитался (болванки нет рядом), просто выходим, не блокируя цикл
+    return false; 
+  }
+
+  // 2. Определяем тип болванки и запускаем запись
+  emRWType rwType = getRfidRWtype();
+  
+  if (rwType != rwUnknown) {
+    Serial.print(F("\nBurning rfid ID: "));
+  }
+
+  switch (rwType) {
+    case T5557:
+      return write2rfidT5557(keyID);
+    case rwUnknown:
+      break;
+  }
+  
+  return false;
 }
 
 emRWType getRfidRWtype() {
@@ -1046,36 +1145,6 @@ emRWType getRfidRWtype() {
   return T5557;
 }
 
-bool write2rfid() {
-  bool Check = true;
-  if (searchEM_Marine(false)) {
-    for (byte i = 0; i < 8; i++)
-      if (addr[i] != keyID[i]) {
-        Check = false;
-        break;
-      }           // сравниваем код для записи с тем, что уже записано в ключе.
-    if (Check) {  // если коды совпадают, ничего писать не нужно
-      digitalWrite(R_Led, LOW);
-      Serial.println(F(" it is the same key. Writing in not needed."));
-      OLED_printError(F("Ключи совпадают"));
-      Sd_ErrorBeep();
-      digitalWrite(R_Led, HIGH);
-      delay(1000);
-      return false;
-    }
-  }
-  emRWType rwType = getRfidRWtype();  // определяем тип T5557 (T5577) или EM4305
-  if (rwType != rwUnknown) Serial.print(F("\n Burning rfid ID: "));
-  switch (rwType) {
-    case T5557:
-      return write2rfidT5557(keyID);
-      break;  //пишем T5557
-    //case EM4305: return write2rfidEM4305(keyID); break;                  //пишем EM4305
-    case rwUnknown: break;
-  }
-  return false;
-}
-
 
 //**********Mifare***************************
 bool searchMifare() {
@@ -1083,21 +1152,29 @@ bool searchMifare() {
   for (byte i = 0; i < 6; i++) {
     key.keyByte[i] = 0xFF;
   }
-  // Ожидаем считывания метки
-  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-    // Копируем UID метки в массив
-    for (byte i = 0; i < rfid.uid.size; i++) {
-      addr[i] = rfid.uid.uidByte[i];
+
+  // Отключаем генератор 125 кГц перед чтением Mifare
+  TCCR2A &= ~_BV(COM2B1);
+  digitalWrite(FreqGen, LOW);
+  delay(3); // Уменьшено с 5 до 3 мс
+
+  // Уменьшено до 3 попыток (было 5)
+  for (byte attempt = 0; attempt < 3; attempt++) {
+    if (rfid.PICC_IsNewCardPresent()) {
+      if (rfid.PICC_ReadCardSerial()) {
+        for (byte i = 0; i < rfid.uid.size; i++) {
+          addr[i] = rfid.uid.uidByte[i];
+        }
+        rfid.PICC_HaltA();
+        keyType = keyMifare;
+        for (byte i = 0; i < 8; i++) {
+          keyID[i] = addr[i];
+        }
+        result = true;
+        break;
+      }
     }
-    rfid.PICC_HaltA();  // Останавливаем считывание метки
-    keyType = keyMifare;
-    for (byte i = 0; i < 8; i++) {
-      keyID[i] = addr[i];
-      Serial.print(addr[i], HEX);
-      Serial.print(":");
-    }
-    Serial.println(F(") Type: Mifare "));
-    result = true;
+    delay(5); // Уменьшено с 10 до 5 мс
   }
   return result;
 }
@@ -1105,45 +1182,58 @@ bool searchMifare() {
 bool write2Mifare() {
   bool result = false;
   bool Check = false;
+  
   for (byte i = 0; i < 6; i++) {
     key.keyByte[i] = 0xFF;
   }
-  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-    // Считываем UID метки
-    for (byte i = 0; i < rfid.uid.size; i++) {
-      addr[i] = rfid.uid.uidByte[i];
-      if (addr[i] != keyID[i]) {
-        Check = true;
-        break;
-      }  // сравниваем код для записи с тем, что уже записано в ключе.
-    }
-    if (Check) {  // сравниваем код для записи с тем, что уже записано в ключе.
-      // Если коды не совпадают пишем новый UID на метку
-      if (rfid.MIFARE_SetUid(keyID, (byte)4, true)) {
-        Serial.println(F(" The key has copied successfully "));
-        OLED_printError(F("The key has copied"), false);
-        Sd_ReadOK();
-        result = true;
-        statOk = result;
+
+  // Отключаем генератор 125 кГц
+  TCCR2A &= ~_BV(COM2B1);
+  digitalWrite(FreqGen, LOW);
+  delay(3); // Уменьшено с 5 до 3 мс
+
+  // Уменьшено до 3 попыток чтения (было 5)
+  for (byte readAttempt = 0; readAttempt < 3; readAttempt++) {
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+      for (byte i = 0; i < rfid.uid.size; i++) {
+        addr[i] = rfid.uid.uidByte[i];
+        if (addr[i] != keyID[i]) {
+          Check = true;
+          break;
+        }
+      }
+      
+      if (Check) {
+        // Уменьшено до 2 попыток записи (было 3)
+        for (byte writeAttempt = 0; writeAttempt < 2; writeAttempt++) {
+          if (rfid.MIFARE_SetUid(keyID, (byte)rfid.uid.size, true)) {
+            OLED_printError(F("Ключ скопирован"), false);
+            Sd_ReadOK();
+            result = true;
+            statOk = result;
+            break;
+          }
+          delay(30); // Уменьшено с 50 до 30 мс
+        }
+        
+        if (!result) {
+          OLED_printError(F("Сбой записи"));
+          Sd_ErrorBeep();
+        }
       } else {
-        digitalWrite(R_Led, LOW);
-        Serial.println(F(" The key copy faild "));
-        OLED_printError(F("Копирование не удалось"));
+        OLED_printError(F("Ключи совпадают"));
         Sd_ErrorBeep();
-        digitalWrite(R_Led, HIGH);
         delay(1000);
       }
-    } else {
-      digitalWrite(R_Led, LOW);
-      Serial.println(F(" it is the same key. Writing in not needed."));
-      OLED_printError(F("Ключи совпадают"));
-      Sd_ErrorBeep();
-      digitalWrite(R_Led, HIGH);
-      delay(1000);
+      
+      rfid.PICC_HaltA();
+      rfid.PCD_StopCrypto1();
+      break;
     }
+    delay(5); // Уменьшено с 10 до 5 мс
   }
-  rfid.PICC_HaltA();  // Останавливаем считывание метки
-  rfid.PCD_StopCrypto1();
+  
+  digitalWrite(R_Led, HIGH);
   return result;
 }
 
@@ -1244,47 +1334,45 @@ void loop() {
     Sd_ReadOK();
     myOLED.update();
   }
-  if ((echo == 't') || enc1.isClick()) {  // переключаель режима чтение/запись
+
+  // ============ ПЕРЕКЛЮЧЕНИЕ РЕЖИМОВ ПО КЛИКУ ЭНКОДЕРА ============
+  if ((echo == 't') || enc1.isClick()) {
     switch (copierMode) {
-      case md_empty: Sd_ErrorBeep(); break;
+      case md_empty:
+        copierMode = md_read;
+        clearLed();
+        digitalWrite(G_Led, HIGH);
+        break;
       case md_read:
         copierMode = md_write;
         clearLed();
         digitalWrite(R_Led, HIGH);
         break;
-        delayMicroseconds(5);
-        break;
       case md_write:
         copierMode = md_threeMode;
         clearLed();
         digitalWrite(B_Led, HIGH);
-        delayMicroseconds(5);
         break;
       case md_threeMode:
         copierMode = md_read;
         clearLed();
         digitalWrite(G_Led, HIGH);
-        delayMicroseconds(5);
         break;
     }
-    
-    showModeSplash(copierMode);   // Показываем заставку режима работы
-    
-    if (copierMode == md_threeMode) { 
-      // Если активен режим очистки - показываем текстовую подсказку
-      #ifndef BLUE_MODE
-        myOLED.clear();
-        myOLED.setCursorXY(0, 0);
-        myOLED.print(F("Поднесите"));
-        myOLED.setCursorXY(0, 12);
-        myOLED.print(F("MIFARE - ключ"));
-        myOLED.setCursorXY(0, 24);
-        myOLED.print(F("для очистки"));
-        myOLED.update();
-      #else
-        // Если активен BlueMode - показываем инфо о сохраненных ключах, как обычно
-        OLED_printKey(keyID);
-      #endif
+    showModeSplash(copierMode);
+    if (copierMode == md_threeMode) {
+#ifndef BLUE_MODE
+      myOLED.clear();
+      myOLED.setCursorXY(0, 0);
+      myOLED.print(F("Поднесите"));
+      myOLED.setCursorXY(0, 12);
+      myOLED.print(F("MIFARE - ключ"));
+      myOLED.setCursorXY(0, 24);
+      myOLED.print(F("для очистки"));
+      myOLED.update();
+#else
+      OLED_printKey(keyID);
+#endif
     } else {
       OLED_printKey(keyID);
     }
@@ -1293,11 +1381,12 @@ void loop() {
     Sd_WriteStep();
     statOk = false;
   }
-   // Поворот влево
+
+  // ============ ПОВОРОТ ЭНКОДЕРА (листание ключей) ============
   if (enc1.isLeft() && (EEPROM_key_count > 0)
-  #ifndef BLUE_MODE
+#ifndef BLUE_MODE
       && (copierMode != md_threeMode)
-  #endif
+#endif
   ) {
     EEPROM_key_index--;
     if (EEPROM_key_index < 1) EEPROM_key_index = EEPROM_key_count;
@@ -1305,12 +1394,11 @@ void loop() {
     OLED_printKey(keyID);
     Sd_WriteStep();
   }
-  
-  // Поворот вправо
+
   if (enc1.isRight() && (EEPROM_key_count > 0)
-  #ifndef BLUE_MODE
+#ifndef BLUE_MODE
       && (copierMode != md_threeMode)
-  #endif
+#endif
   ) {
     EEPROM_key_index++;
     if (EEPROM_key_index > EEPROM_key_count) EEPROM_key_index = 1;
@@ -1319,52 +1407,80 @@ void loop() {
     Sd_WriteStep();
   }
 
-  // Длительное нажатие (сохранение ключа)
-  if ((copierMode != md_empty) 
-  #ifndef BLUE_MODE
+  // ============ ДЛИТЕЛЬНОЕ НАЖАТИЕ (сохранение ключа) ============
+  if ((copierMode != md_empty)
+#ifndef BLUE_MODE
       && (copierMode != md_threeMode)
-  #endif
+#endif
       && enc1.isHolded()
   ) {
     if (EPPROM_AddKey(keyID)) {
-      OLED_printError("Ключ сохранён", false);
+      OLED_printError(F("Ключ сохранён"), false);
       Sd_ReadOK();
       delay(1000);
     } else Sd_ErrorBeep();
-    OLED_printKey(keyID); 
+    OLED_printKey(keyID);
   }
 
-  if (millis() - stTimer < 100) return;  //задержка в 100 мс
+  // ============ ОСНОВНОЙ ЦИКЛ (поиск/запись/эмуляция) ============
+  if (millis() - stTimer < 100) return;
   stTimer = millis();
+
   switch (copierMode) {
     case md_empty:
     case md_read:
-      if (searchCyfral() || searchMetacom() || searchEM_Marine() || searchIbutton() || searchMifare()) {  // запускаем поиск cyfral, затем поиск EM_Marine, затем поиск dallas
-        //keyID[0] = 0xFF; keyID[1] = 0xA9; keyID[2] =  0x8A; keyID[3] = 0xA4; keyID[4] = 0x87; keyID[5] = 0x78; keyID[6] = 0x98; keyID[7] = 0x6A;
+      // Сначала пробуем 125кГц / 1-Wire
+      if (searchCyfral() || searchMetacom() || searchEM_Marine() || searchIbutton()) {
         Sd_ReadOK();
         copierMode = md_read;
         digitalWrite(G_Led, HIGH);
         if (indxKeyInROM(keyID) == 0) OLED_printKey(keyID, 1);
         else OLED_printKey(keyID, 3);
+      } else {
+        // Ничего не нашли — пробуем Mifare (с отключённым генератором 125кГц)
+        TCCR2A &= ~_BV(COM2B1);
+        digitalWrite(FreqGen, LOW);
+        delay(5);
+        if (searchMifare()) {
+          Sd_ReadOK();
+          copierMode = md_read;
+          digitalWrite(G_Led, HIGH);
+          if (indxKeyInROM(keyID) == 0) OLED_printKey(keyID, 1);
+          else OLED_printKey(keyID, 3);
+        }
       }
       break;
+
     case md_write:
+      if (keyType == keyMifare) {
+        TCCR2A &= ~_BV(COM2B1);
+        digitalWrite(FreqGen, LOW);
+        delay(5);
+      }
       if (keyType == keyEM_Marine) write2rfid();
       else if (keyType == keyMifare) write2Mifare();
       else write2iBtn();
       break;
+
     case md_threeMode:
 #ifdef BLUE_MODE
+      if (keyType == keyMifare) {
+        TCCR2A &= ~_BV(COM2B1);
+        digitalWrite(FreqGen, LOW);
+      }
       BM_SendKey(keyID);
       break;
 #endif
 #ifndef BLUE_MODE
       if (!statOk) {
+        TCCR2A &= ~_BV(COM2B1);
+        digitalWrite(FreqGen, LOW);
+        delay(5);
         clear2Mifare();
         break;
       }
 #endif
-  }  //end switch
+  }  // end switch
 }
 
 //***************** звуки****************
@@ -1401,16 +1517,16 @@ void Sd_ErrorBeep() {  // звук "ERROR"
 }
 
 void Sd_StartOK() {  // звук "Успешное включение"
-  tone(speakerPin, NOTE_A7);
-  delay(100);
-  tone(speakerPin, NOTE_G7);
-  delay(100);
-  tone(speakerPin, NOTE_E7);
-  delay(100);
-  tone(speakerPin, NOTE_C7);
-  delay(100);
-  tone(speakerPin, NOTE_D7);
-  delay(100);
+  //tone(speakerPin, NOTE_A7);
+  //delay(100);
+  //tone(speakerPin, NOTE_G7);
+  //delay(100);
+  //tone(speakerPin, NOTE_E7);
+  //delay(100);
+  //tone(speakerPin, NOTE_C7);
+  //delay(100);
+  //tone(speakerPin, NOTE_D7);
+  //delay(100);
   tone(speakerPin, NOTE_B7);
   delay(100);
   tone(speakerPin, NOTE_F7);
