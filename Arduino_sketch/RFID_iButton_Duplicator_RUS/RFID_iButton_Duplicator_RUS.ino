@@ -185,10 +185,10 @@ void showModeSplash(emMode mode) {
       myOLED.print(F(" Чтение"));
   }
   
-  myOLED.update();       // Отправляем буфер на дисплей
+  myOLED.update();      // Отправляем буфер на дисплей
   delay(300);           // Держим надпись ~1.2 секунды
-  myOLED.setScale(1);    // ⚠️ Обязательно возвращаем масштаб 1x!
-  myOLED.clear();        // Очищаем перед отрисовкой основного экрана
+  myOLED.setScale(1);   // Обязательно возвращаем масштаб 1x!
+  myOLED.clear();       // Очищаем перед отрисовкой основного экрана
 }
 
 void setup() {
@@ -255,7 +255,7 @@ void setup() {
   }
   enc1.setTickMode(AUTO);
   enc1.setType(TYPE2);
-  // enc1.setDirection(REVERSE);         // NORM / REVERSE
+  // enc1.setDirection(REVERSE);     // NORM / REVERSE
   Timer1.initialize(1500);           // установка таймера на каждые 1000 микросекунд (= 1 мс)
   Timer1.attachInterrupt(timerIsr);  // запуск таймера
 }
